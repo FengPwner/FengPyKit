@@ -26,7 +26,8 @@ cd FengPYkit
 ```bash
    python3 --version
 ```
-3.(Optional) Install `figlet` for the best visual experience:
+3. **(Optional) Install `figlet` for the best visual experience:**
+
 If `figlet` is not installed, the script will fallback to a standard text banner.
 
 ◦Debian/Ubuntu/Kali: `sudo apt install figlet`
