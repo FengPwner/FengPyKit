@@ -106,13 +106,6 @@ def show_banner():
     print(f"{color.CYAN}│{color.RESET} {color.BOLD}FengAK{color.RESET}  {color.MAGENTA}vS2.0{color.RESET}  {color.DIM}Network Stress Testing Framework{color.RESET}")
     print(f"{color.CYAN}├{'─' * 58}┤{color.RESET}")
 
-    scapy_flag = f"{color.GREEN}● AVAILABLE{color.RESET}" if SCAPY_AVAILABLE else f"{color.RED}● MISSING{color.RESET}"
-    print(f"{color.CYAN}│{color.RESET} {color.DIM}TIME    :{color.RESET} {now}")
-    print(f"{color.CYAN}│{color.RESET} {color.DIM}PLATFORM:{color.RESET} {info.get('platform', 'N/A')}")
-    print(f"{color.CYAN}│{color.RESET} {color.DIM}PYTHON  :{color.RESET} {info.get('python', 'N/A')}")
-    print(f"{color.CYAN}│{color.RESET} {color.DIM}PID     :{color.RESET} {info.get('pid', 'N/A')}")
-    print(f"{color.CYAN}│{color.RESET} {color.DIM}SCAPY   :{color.RESET} {scapy_flag}")
-
     print(f"{color.CYAN}├{'─' * 58}┤{color.RESET}")
     print(f"{color.CYAN}│{color.RESET} {color.DIM}AUTHOR :{color.RESET} FengPwner")
     print(f"{color.CYAN}│{color.RESET} {color.DIM}GITHUB :{color.RESET} github.com/FengPwner")
