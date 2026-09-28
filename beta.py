@@ -100,7 +100,7 @@ def show_banner():
     os.system("figlet FengDDoS")
     print(f"{color.YELLOW}╔═══════════════════════════════════════════════════════════╗{color.RESET}")
     print(f"{color.YELLOW}║{color.RESET}  {color.BOLD}FengDDoS v0.6.0{color.RESET} - Advanced Network Stress Testing Framework")
-    print(f"{color.YELLOW}║{color.RESET}  {color.DIM}Author:{color.RESET} FengPwner  {color.DIM}\n{color.RESET}  {color.DIM}GitHub:{color.RESET} github.com/FengPwner")
+    print(f"{color.YELLOW}║{color.RESET}  {color.DIM}Author:{color.RESET} FengPwner  {color.DIM}|{color.RESET}  {color.DIM}GitHub:{color.RESET} github.com/FengPwner")
     print(f"{color.YELLOW}║{color.RESET}  {color.DIM}Atomgit:{color.RESET} atomgit.com/FengPwner  {color.DIM}|{color.RESET}  {color.DIM}CSDN:{color.RESET} blog.csdn.net/2302_76189356")
     print(f"{color.YELLOW}╚═══════════════════════════════════════════════════════════╝{color.RESET}")
     print(f"{color.RED}{color.BOLD}  ⚠  FOR AUTHORIZED TESTING ONLY - DO NOT USE ILLEGALLY  ⚠{color.RESET}\n")
