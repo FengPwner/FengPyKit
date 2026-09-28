@@ -97,15 +97,7 @@ stats = AttackStats()
 
 def show_banner():
     os.system("clear")
-    banner = """
-  ███████╗██╗  ██╗ ██████╗ ██╗     ███████╗███████╗
-  ██╔════╝██║  ██║██╔═══██╗██║     ██╔════╝██╔════╝
-  █████╗  ███████║██║   ██║██║     █████╗  ███████╗
-  ██╔══╝  ██╔══██║██║   ██║██║     ██╔══╝  ╚════██║
-  ██║     ██║  ██║╚██████╔╝███████╗███████╗███████║
-  ╚═╝     ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚══════╝╚══════╝
-"""
-    print(f"{color.CYAN}{color.BOLD}{banner}{color.RESET}")
+    os.system("figlet FengDDoS")
     print(f"{color.YELLOW}╔═══════════════════════════════════════════════════════════╗{color.RESET}")
     print(f"{color.YELLOW}║{color.RESET}  {color.BOLD}FengDDoS v0.6.0{color.RESET} - Advanced Network Stress Testing Framework")
     print(f"{color.YELLOW}║{color.RESET}  {color.DIM}Author:{color.RESET} FengPwner  {color.DIM}|{color.RESET}  {color.DIM}GitHub:{color.RESET} github.com/FengPwner")
