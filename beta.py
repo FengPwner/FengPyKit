@@ -100,10 +100,10 @@ def show_banner():
     info = system_info()
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    os.system("figlet FengDDoS")
+    os.system("figlet FengAK")
 
     print(f"{color.CYAN}┌{'─' * 58}┐{color.RESET}")
-    print(f"{color.CYAN}│{color.RESET} {color.BOLD}FengDDoS{color.RESET}  {color.MAGENTA}v0.6.0{color.RESET}  {color.DIM}Network Stress Testing Framework{color.RESET}")
+    print(f"{color.CYAN}│{color.RESET} {color.BOLD}FengAK{color.RESET}  {color.MAGENTA}vS2.0{color.RESET}  {color.DIM}Network Stress Testing Framework{color.RESET}")
     print(f"{color.CYAN}├{'─' * 58}┤{color.RESET}")
 
     scapy_flag = f"{color.GREEN}● AVAILABLE{color.RESET}" if SCAPY_AVAILABLE else f"{color.RED}● MISSING{color.RESET}"
