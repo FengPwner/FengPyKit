@@ -150,19 +150,18 @@ def print_status_bar(stats_obj, target_ip, target_port, mode):
     minutes = int(elapsed // 60)
     seconds = int(elapsed % 60)
     peak = stats_obj.peak_qps
-    bar_width = 40
+    bar_width = 20
     progress = min(elapsed / 300, 1.0) if stats_obj.duration_limit else min(elapsed / 60, 1.0)
     filled = int(bar_width * progress)
     bar = "█" * filled + "░" * (bar_width - filled)
-    status_line = (
-        f"\r{color.CYAN}╔{'═' * 58}╗{color.RESET}\n"
-        f"{color.CYAN}║{color.RESET} {color.BOLD}TARGET:{color.RESET} {target_ip}:{target_port}  {color.BOLD}MODE:{color.RESET} {mode.upper()}\n"
-        f"{color.CYAN}║{color.RESET} {color.BOLD}TIME:{color.RESET} [{bar}] {minutes:02d}:{seconds:02d}\n"
-        f"{color.CYAN}║{color.RESET} {color.GREEN}SENT:{color.RESET} {format_number(sent):>8} pkts  {color.GREEN}QPS:{color.RESET} {format_number(qps):>8}  {color.GREEN}PEAK:{color.RESET} {format_number(peak):>8}\n"
-        f"{color.CYAN}║{color.RESET} {color.YELLOW}BW:{color.RESET} {bw:.2f} MB/s  {color.YELLOW}DATA:{color.RESET} {format_bytes(stats_obj.get_bytes()):>10}\n"
-        f"{color.CYAN}╚{'═' * 58}╝{color.RESET}"
+    line = (
+        f"{color.CYAN}◈ {target_ip}:{target_port} {mode.upper():<10}{color.RESET} "
+        f"{color.YELLOW}[{bar}]{color.RESET} {minutes:02d}:{seconds:02d}  "
+        f"{color.GREEN}SENT {format_number(sent):>7}  QPS {format_number(qps):>6}  PEAK {format_number(peak):>6}{color.RESET}  "
+        f"{color.YELLOW}BW {bw:.2f}MB/s  DATA {format_bytes(stats_obj.get_bytes())}{color.RESET}"
     )
-    print(status_line, end="", flush=True)
+    print(f"\r{line}\033[K", end="", flush=True)
+
 
 def verify_packets(target_ip, target_port, interval=10):
     while stats.running:
