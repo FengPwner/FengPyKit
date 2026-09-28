@@ -97,17 +97,29 @@ stats = AttackStats()
 
 def show_banner():
     os.system("clear")
+    info = system_info()
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
     os.system("figlet FengDDoS")
-    print(f"{color.YELLOW}╔═══════════════════════════════════════════════════════════╗{color.RESET}")
-    print(f"{color.YELLOW}║{color.RESET}  {color.BOLD}FengDDoS v0.6.0{color.RESET} - Advanced Network Stress Testing Framework")
-    print(f"{color.YELLOW}║{color.RESET}  {color.DIM}Author:{color.RESET} FengPwner")
-    print(f"{color.YELLOW}║{color.RESET}  {color.BOLD}
-GitHub:{color.RESET} FengPwner")
-    print(f"{color.YELLOW}║{color.RESET}  {color.BOLD}
-Atomgit:{color.RESET} FengPwner")
-    print(f"{color.YELLOW}║{color.RESET}  {color.BOLD}
-CSDN:{color.RESET} FengPwner")
-    print(f"{color.YELLOW}╚═══════════════════════════════════════════════════════════╝{color.RESET}")
+
+    print(f"{color.CYAN}┌{'─' * 58}┐{color.RESET}")
+    print(f"{color.CYAN}│{color.RESET} {color.BOLD}FengDDoS{color.RESET}  {color.MAGENTA}v0.6.0{color.RESET}  {color.DIM}Network Stress Testing Framework{color.RESET}")
+    print(f"{color.CYAN}├{'─' * 58}┤{color.RESET}")
+
+    scapy_flag = f"{color.GREEN}● AVAILABLE{color.RESET}" if SCAPY_AVAILABLE else f"{color.RED}● MISSING{color.RESET}"
+    print(f"{color.CYAN}│{color.RESET} {color.DIM}TIME    :{color.RESET} {now}")
+    print(f"{color.CYAN}│{color.RESET} {color.DIM}PLATFORM:{color.RESET} {info.get('platform', 'N/A')}")
+    print(f"{color.CYAN}│{color.RESET} {color.DIM}PYTHON  :{color.RESET} {info.get('python', 'N/A')}")
+    print(f"{color.CYAN}│{color.RESET} {color.DIM}PID     :{color.RESET} {info.get('pid', 'N/A')}")
+    print(f"{color.CYAN}│{color.RESET} {color.DIM}SCAPY   :{color.RESET} {scapy_flag}")
+
+    print(f"{color.CYAN}├{'─' * 58}┤{color.RESET}")
+    print(f"{color.CYAN}│{color.RESET} {color.DIM}AUTHOR :{color.RESET} FengPwner")
+    print(f"{color.CYAN}│{color.RESET} {color.DIM}GITHUB :{color.RESET} github.com/FengPwner")
+    print(f"{color.CYAN}│{color.RESET} {color.DIM}ATOMGIT:{color.RESET} atomgit.com/FengPwner")
+    print(f"{color.CYAN}│{color.RESET} {color.DIM}CSDN   :{color.RESET} blog.csdn.net/2302_76189356")
+    print(f"{color.CYAN}└{'─' * 58}┘{color.RESET}")
+
     print(f"{color.RED}{color.BOLD}  ⚠  FOR AUTHORIZED TESTING ONLY - DO NOT USE ILLEGALLY  ⚠{color.RESET}\n")
 
 def format_bytes(byte_count):
