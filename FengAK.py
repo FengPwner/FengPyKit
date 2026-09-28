@@ -84,6 +84,7 @@ def check_connectivity(target_ip, target_port, interval=10):
     while stats.running:
         status = "UNKNOWN"
         latency = None
+        err_detail = ""
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             s.settimeout(3)
@@ -92,14 +93,25 @@ def check_connectivity(target_ip, target_port, interval=10):
             latency = (time.time() - start) * 1000
             status = "ALIVE"
             s.close()
-        except Exception:
-            status = "UNREACHABLE"
+        except ConnectionRefusedError:
+            status = "REFUSED"
+            err_detail = "目标端口拒绝连接"
+        except socket.timeout:
+            status = "TIMEOUT"
+            err_detail = "连接超时"
+        except OSError as e:
+            status = "ERROR"
+            err_detail = str(e)
+        except Exception as e:
+            status = "ERROR"
+            err_detail = str(e)
         timestamp = datetime.now().strftime("%H:%M:%S")
         if latency is not None:
             print(f"\n{color.GREEN}[{timestamp}] [Connectivity] {target_ip}:{target_port} -> {status} (RTT: {latency:.1f} ms){color.RESET}")
         else:
-            print(f"\n{color.RED}[{timestamp}] [Connectivity] {target_ip}:{target_port} -> {status}{color.RESET}")
+            print(f"\n{color.RED}[{timestamp}] [Connectivity] {target_ip}:{target_port} -> {status} ({err_detail}){color.RESET}")
         time.sleep(interval)
+
 
 def udp_flood(target_ip, target_port, packet_size):
     while stats.running:
