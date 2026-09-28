@@ -96,9 +96,9 @@ def check_connectivity(target_ip, target_port, interval=10):
             status = "UNREACHABLE"
         timestamp = datetime.now().strftime("%H:%M:%S")
         if latency is not None:
-            print(f"{color.GREEN}[{timestamp}] [Connectivity] {target_ip}:{target_port} -> {status} (RTT: {latency:.1f} ms){color.RESET}")
+            print(f"\n{color.GREEN}[{timestamp}] [Connectivity] {target_ip}:{target_port} -> {status} (RTT: {latency:.1f} ms){color.RESET}")
         else:
-            print(f"{color.RED}[{timestamp}] [Connectivity] {target_ip}:{target_port} -> {status}{color.RESET}")
+            print(f"\n{color.RED}[{timestamp}] [Connectivity] {target_ip}:{target_port} -> {status}{color.RESET}")
         time.sleep(interval)
 
 def udp_flood(target_ip, target_port, packet_size):
