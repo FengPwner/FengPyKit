@@ -70,7 +70,7 @@ stats = AttackStats()
 
 def show_banner():
     os.system("clear")
-    os.system("figlet FengDDoS")
+    os.system("figlet FengAK")
     print(f"{color.YELLOW}---------------------------------------------------{color.RESET}")
     print(f"{color.BOLD} Author :{color.RESET} FengPwner")
     print(f"{color.BOLD} Github :{color.RESET} https://github.com/FengPwner")
