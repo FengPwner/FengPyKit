@@ -394,11 +394,6 @@ def memcached_amplification(target_ip, target_port, packet_size):
             stats.errors += 1
         if not stats.check_duration(): break
 
-def generate_random_payload(size):
-    patterns = [
-        lambda s: random._urandom(s),
-        lambda s: b"A" * s,
-        lambda
 
 def generate_random_payload(size):
     patterns = [
