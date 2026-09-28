@@ -1,8 +1,8 @@
-# FengDDoS
-**FengDDoS** is a lightweight, command-line based network stress testing tool written in Python. It is designed for educational purposes and network security testing.
+# FengAK
+**FengAK** is a lightweight, command-line based network stress testing tool written in Python. It is designed for educational purposes and network security testing.
 > **⚠️ IMPORTANT LEGAL DISCLAIMER**
 >
-> **FengDDoS** is intended for **educational and authorized security testing purposes only**.
+> **FengAK** is intended for **educational and authorized security testing purposes only**.
 >
 > - **Do not** use this tool to attack networks or servers without explicit permission from the owner.
 > - **Do not** use this tool for any illegal activities.
@@ -38,7 +38,7 @@ If `figlet` is not installed, the script will fallback to a standard text banner
 ## Use
 **Run the script using Python 3:**
 ```
-python3 FengDDoS.py
+python3 FengAK.py
 ```
 
 ## License
@@ -47,4 +47,4 @@ This project is open-source. Please use responsibly.
 
 Author: FengPwner
 
-Version: 1.0
+Version: S1.3
