@@ -48,4 +48,4 @@ This project is open-source. Please use responsibly.
 
 Author: FengPwner
 
-Version: S1.3
+Version: S2.0
